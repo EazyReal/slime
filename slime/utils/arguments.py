@@ -917,8 +917,32 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ],
                 default="grpo",
                 help=(
-                    "Advantage estimator to use. Note: on-policy distillation (OPD) is now orthogonal "
-                    "to the advantage estimator. Use --opd-kl-coef > 0 to enable OPD on top of any estimator."
+                    "Advantage (credit-assignment) estimator. This axis is orthogonal to the surrogate "
+                    "(--policy-loss) and the IS granularity (--is-level). Note: on-policy distillation (OPD) "
+                    "is also orthogonal; use --opd-kl-coef > 0 to enable OPD on top of any estimator. "
+                    "DEPRECATED values 'gspo' and 'cispo' are accepted for one release and remapped to "
+                    "'--is-level sequence' and '--policy-loss cispo' respectively."
+                ),
+            )
+            parser.add_argument(
+                "--policy-loss",
+                type=str,
+                choices=["ppo", "cispo"],
+                default="ppo",
+                help=(
+                    "Policy-loss surrogate (the bounding rule that owns the importance weight), orthogonal "
+                    "to --advantage-estimator and --is-level. 'ppo' is the clipped-ratio objective; 'cispo' "
+                    "is the CISPO score-form objective (MiniMax-M1, https://arxiv.org/abs/2506.13585)."
+                ),
+            )
+            parser.add_argument(
+                "--is-level",
+                type=str,
+                choices=["token", "sequence"],
+                default="token",
+                help=(
+                    "Granularity of the importance-sampling ratio in the policy loss. 'token' is standard "
+                    "per-token PPO; 'sequence' is the GSPO sequence-level ratio (https://arxiv.org/abs/2507.18071)."
                 ),
             )
             parser.add_argument(
@@ -1739,6 +1763,24 @@ def _validate_update_weight_args(args) -> None:
 def slime_validate_args(args):
     args.eval_datasets = _resolve_eval_datasets(args)
 
+    # Deprecation shim: --advantage-estimator used to also select the surrogate ("cispo") and the
+    # IS granularity ("gspo"). These are now the orthogonal --policy-loss / --is-level axes. Remap the
+    # legacy values for one release (then drop them from the --advantage-estimator choices above).
+    _LEGACY_ADVANTAGE_ALIASES = {
+        "gspo": ("is_level", "sequence"),
+        "cispo": ("policy_loss", "cispo"),
+    }
+    if args.advantage_estimator in _LEGACY_ADVANTAGE_ALIASES:
+        field, value = _LEGACY_ADVANTAGE_ALIASES[args.advantage_estimator]
+        warnings.warn(
+            f"--advantage-estimator {args.advantage_estimator} is deprecated and will be removed; it now "
+            f"maps to '--advantage-estimator grpo --{field.replace('_', '-')} {value}'.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        setattr(args, field, value)
+        args.advantage_estimator = "grpo"
+
     if args.kl_coef != 0 or args.use_kl_loss:
         if not os.path.exists(args.ref_load):
             raise FileNotFoundError(f"ref_load {args.ref_load} does not exist, please check the path.")
@@ -1847,7 +1889,7 @@ def slime_validate_args(args):
     if args.eps_clip_high is None:
         args.eps_clip_high = args.eps_clip
 
-    if args.advantage_estimator == "cispo" and args.eps_clip < 1.0:
+    if args.policy_loss == "cispo" and args.eps_clip < 1.0:
         logger.warning(
             "CISPO is canonically single-sided, but --eps-clip=%s keeps the lower clip bound %s active. "
             "Set --eps-clip 1.0 (and tune --eps-clip-high, e.g. 4.0) for the canonical wide setting.",
