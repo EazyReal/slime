@@ -248,6 +248,8 @@ def make_slime_validate_args(**overrides):
         save=None,
         kl_loss_coef=0,
         advantage_estimator="grpo",
+        policy_loss="ppo",
+        is_level="token",
         normalize_advantages=False,
         use_rollout_logprobs=False,
         use_tis=False,
@@ -379,6 +381,51 @@ def test_update_weight_delta_rejects_unknown_transport(monkeypatch):
 
     with pytest.raises(ValueError, match="supports only --update-weight-transport=nccl or disk"):
         module._validate_update_weight_args(args)
+
+
+@pytest.mark.unit
+def test_legacy_gspo_advantage_estimator_maps_to_sequence_is_level(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(advantage_estimator="gspo")
+
+    with pytest.warns(FutureWarning, match="--advantage-estimator gspo is deprecated"):
+        module.slime_validate_args(args)
+
+    assert args.advantage_estimator == "grpo"
+    assert args.is_level == "sequence"
+    assert args.policy_loss == "ppo"
+
+
+@pytest.mark.unit
+def test_legacy_cispo_advantage_estimator_maps_to_cispo_policy_loss(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    # eps_clip default 0.2 < 1.0 keeps the CISPO single-sided warning live; assert it still fires
+    # off the remapped --policy-loss axis (regression guard for the shim ordering).
+    args = make_slime_validate_args(advantage_estimator="cispo")
+
+    with pytest.warns(FutureWarning, match="--advantage-estimator cispo is deprecated"):
+        module.slime_validate_args(args)
+
+    assert args.advantage_estimator == "grpo"
+    assert args.policy_loss == "cispo"
+    assert args.is_level == "token"
+
+
+@pytest.mark.unit
+def test_non_legacy_advantage_estimator_is_untouched(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(advantage_estimator="grpo", policy_loss="cispo", is_level="sequence")
+
+    import warnings as _warnings
+
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("error", FutureWarning)
+        module.slime_validate_args(args)
+
+    # The orthogonal axes are passed through verbatim; no legacy remap.
+    assert args.advantage_estimator == "grpo"
+    assert args.policy_loss == "cispo"
+    assert args.is_level == "sequence"
 
 
 if __name__ == "__main__":
