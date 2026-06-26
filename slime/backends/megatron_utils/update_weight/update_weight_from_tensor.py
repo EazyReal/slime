@@ -231,7 +231,7 @@ def _send_to_colocated_engine(
     long_live_tensors = []
 
     if getattr(FlattenedTensorBucket, "supports_multi_dtypes", False):
-        converted_named_tensors_by_dtypes = {"dtype": hf_named_tensors}
+        converted_named_tensors_by_dtypes = {"dtype": hf_named_tensors} if hf_named_tensors else {}
     else:
         converted_named_tensors_by_dtypes = {}
         for name, tensor in hf_named_tensors:
@@ -263,8 +263,13 @@ def _send_to_colocated_engine(
 
     refs = []
     if dist.get_rank() == ipc_gather_src:
-        # TODO: here we assume all ranks have the same number of dtypes, not sure if that is correct.
-        num_dtypes = len(serialized_named_tensors[0])
+        bucket_counts = [len(tensors) for tensors in serialized_named_tensors]
+        if len(set(bucket_counts)) != 1:
+            raise RuntimeError(
+                f"Colocated weight update expected equal bucket counts from IPC ranks, got {bucket_counts}"
+            )
+
+        num_dtypes = bucket_counts[0]
         for i in range(num_dtypes):
             kwargs = {
                 "serialized_named_tensors": [tensors[i] for tensors in serialized_named_tensors],
