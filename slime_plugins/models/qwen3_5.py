@@ -83,6 +83,12 @@ class Qwen3_5GatedDeltaNet(nn.Module):
 
         self.out_proj = nn.Linear(self.value_dim, self.hidden_size, bias=False)
 
+        # GDN parameters are replicated across TP ranks, while sequence-parallel
+        # backward produces disjoint gradient slices that must be summed.
+        if getattr(args, "sequence_parallel", False):
+            for parameter in self.parameters():
+                parameter.sequence_parallel = True
+
     def forward(
         self,
         hidden_states: torch.Tensor,

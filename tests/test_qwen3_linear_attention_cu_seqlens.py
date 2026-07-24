@@ -188,3 +188,27 @@ def test_linear_attention_forwards_cu_seqlens_to_chunk_kernel(
     assert output.shape == hidden_states.shape
     assert len(chunk_calls) == 1
     assert torch.equal(chunk_calls[0], cu_seqlens)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("sequence_parallel", [False, True])
+def test_qwen3_5_reconciles_replicated_gdn_gradients_across_tp(
+    monkeypatch,
+    sequence_parallel: bool,
+):
+    module = load_module("slime_plugins.models.qwen3_5")
+    monkeypatch.setattr(module.torch.cuda, "current_device", lambda: "cpu")
+    monkeypatch.setattr(module, "ShortConvolution", FakeShortConvolution, raising=False)
+    monkeypatch.setattr(module, "FusedRMSNormGated", FakeFusedRMSNormGated, raising=False)
+    monkeypatch.setattr(module, "get_chunk_gated_delta_rule", lambda _backend: object())
+
+    layer = module.Qwen3_5GatedDeltaNet(
+        make_config(),
+        layer_idx=0,
+        args=SimpleNamespace(
+            qwen_gdn_backend="fla",
+            sequence_parallel=sequence_parallel,
+        ),
+    )
+
+    assert all(getattr(parameter, "sequence_parallel", False) is sequence_parallel for parameter in layer.parameters())
