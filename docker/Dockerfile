@@ -106,7 +106,7 @@ ARG ENABLE_SGLANG_PATCH=1
 COPY docker/patch/${PATCH_VERSION}/sglang*.patch /sgl-workspace/sglang/
 RUN if [ "$ENABLE_SGLANG_PATCH" = "1" ]; then \
   cd /sgl-workspace/sglang && \
-  for patch in sglang.patch sglang-top_p.patch sglang-release_hicache.patch sglang-pull_weights.patch; do \
+  for patch in sglang.patch sglang-top_p.patch sglang-release_hicache.patch sglang-pull_weights.patch sglang-rl-recapture.patch; do \
     if [ ! -f "$patch" ]; then \
       continue; \
     fi; \

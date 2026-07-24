@@ -1,0 +1,93 @@
+diff --git a/python/sglang/srt/managers/scheduler_components/weight_updater.py b/python/sglang/srt/managers/scheduler_components/weight_updater.py
+index 2ed3b21..85bbaa0 100644
+--- a/python/sglang/srt/managers/scheduler_components/weight_updater.py
++++ b/python/sglang/srt/managers/scheduler_components/weight_updater.py
+@@ -86,6 +86,7 @@ class SchedulerWeightUpdaterManager:
+     metrics_collector: Optional[Any] = None
+     offload_tags: set = field(default_factory=set)
+     stashed_model_static_state: Any = None
++    cuda_graphs_need_recapture: bool = False
+ 
+     @contextmanager
+     def _observe_weight_load(self, source: str) -> Iterator[None]:
+@@ -109,6 +110,39 @@ class SchedulerWeightUpdaterManager:
+             )
+             assert flush_cache_success, "Cache flush failed after updating weights"
+ 
++    def recapture_cuda_graphs_after_weight_update(self) -> None:
++        model_runner = self.tp_worker.model_runner
++        eager_runner = getattr(model_runner, "eager_runner", None)
++        prefill_runner = getattr(model_runner, "prefill_cuda_graph_runner", None)
++        decode_runner = getattr(model_runner, "decode_cuda_graph_runner", None)
++        if prefill_runner is not None and prefill_runner is not eager_runner:
++            logger.info("Recapturing TP worker prefill CUDA graphs after weight update")
++            model_runner.init_prefill_cuda_graph()
++        if decode_runner is not None and decode_runner is not eager_runner:
++            logger.info("Recapturing TP worker decode CUDA graphs after weight update")
++            model_runner.init_decode_cuda_graph()
++
++        if self.draft_worker is not None:
++            recapture_draft = getattr(self.draft_worker, "init_cuda_graphs", None)
++            if recapture_draft is not None:
++                logger.info("Recapturing draft worker CUDA graphs after weight update")
++                recapture_draft()
++
++    def maybe_recapture_cuda_graphs_after_weight_update(self) -> None:
++        graph_inputs = {
++            GPU_MEMORY_TYPE_WEIGHTS,
++            GPU_MEMORY_TYPE_KV_CACHE,
++            GPU_MEMORY_TYPE_CUDA_GRAPH,
++        }
++        if self.cuda_graphs_need_recapture and not graph_inputs.intersection(
++            self.offload_tags
++        ):
++            self.recapture_cuda_graphs_after_weight_update()
++            self.cuda_graphs_need_recapture = False
++
++    def mark_cuda_graphs_stale(self) -> None:
++        self.cuda_graphs_need_recapture = True
++
+     def update_weights_from_disk(self, recv_req: UpdateWeightFromDiskReqInput):
+         """In-place update of the weights from disk."""
+         with self._observe_weight_load("disk"):
+@@ -118,6 +152,7 @@ class SchedulerWeightUpdaterManager:
+                 success, message = self.draft_worker.update_weights_from_disk(recv_req)
+             if tp_success:
+                 self.flush_cache_after_weight_update(recv_req)
++                self.mark_cuda_graphs_stale()
+             if not success:
+                 logger.error(message)
+             return UpdateWeightFromDiskReqOutput(
+@@ -146,6 +181,7 @@ class SchedulerWeightUpdaterManager:
+             success, message = self.tp_worker.update_weights_from_distributed(recv_req)
+             if success:
+                 self.flush_cache_after_weight_update(recv_req)
++                self.mark_cuda_graphs_stale()
+             else:
+                 logger.error(message)
+             return UpdateWeightsFromDistributedReqOutput(
+@@ -162,6 +198,7 @@ class SchedulerWeightUpdaterManager:
+             success, message = worker.update_weights_from_tensor(recv_req)
+             if success:
+                 self.flush_cache_after_weight_update(recv_req)
++                self.mark_cuda_graphs_stale()
+             else:
+                 logger.error(message)
+             torch.distributed.barrier(group=self.tp_cpu_group)
+@@ -176,6 +213,7 @@ class SchedulerWeightUpdaterManager:
+                 success, message = self.draft_worker.update_weights_from_ipc(recv_req)
+             if tp_success:
+                 self.flush_cache_after_weight_update(recv_req)
++                self.mark_cuda_graphs_stale()
+             if not success:
+                 logger.error(message)
+             torch.distributed.barrier(group=self.tp_cpu_group)
+@@ -309,6 +347,8 @@ class SchedulerWeightUpdaterManager:
+                     if queue is not None:
+                         queue.resume_memory_occupation()
+ 
++        self.maybe_recapture_cuda_graphs_after_weight_update()
++
+         return ResumeMemoryOccupationReqOutput()
+ 
+     def pull_weights(self, recv_req: PullWeightsReqInput):
