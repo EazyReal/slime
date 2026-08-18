@@ -9,6 +9,7 @@ from megatron.core import mpu
 from torch.utils.checkpoint import checkpoint
 
 from slime.utils.distributed_utils import distributed_masked_whiten
+from slime.utils.logit_scale import scale_logits_by_rollout_temperature
 from slime.utils.misc import load_function
 from slime.utils.ppo_utils import (
     calculate_log_probs_and_entropy,
@@ -130,8 +131,8 @@ def get_responses(
     assert logits.size(0) == 1, f"{logits.shape}"
     logits = logits.squeeze(0)
 
-    if apply_temperature and args.rollout_temperature != 1.0:
-        logits = logits.div(args.rollout_temperature)
+    if apply_temperature:
+        logits = scale_logits_by_rollout_temperature(logits, args.rollout_temperature)
 
     cp_size = mpu.get_context_parallel_world_size()
     end = 0
@@ -538,9 +539,7 @@ def get_log_probs_and_entropy(
     logits = logits.squeeze(0)
 
     # Apply rollout temperature scaling to logits to match rollout-time log-probs.
-    rollout_temperature = getattr(args, "rollout_temperature", 1.0)
-    if rollout_temperature != 1.0:
-        logits = logits / rollout_temperature
+    logits = scale_logits_by_rollout_temperature(logits, getattr(args, "rollout_temperature", 1.0))
     logits = logits.contiguous()
     T = logits.size(0)
     device = logits.device

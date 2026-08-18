@@ -619,6 +619,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_rollout_temperature_zero_guard.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_value_temperature.py"
             },
             {
